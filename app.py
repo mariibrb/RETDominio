@@ -1,91 +1,99 @@
 import streamlit as st
 import pandas as pd
 import io
+import re
 
 def processar_relatorio_dominio_ret(file_buffer):
-    # Lendo o arquivo CSV nº 4 com separador ';' conforme identificado
-    # dtype=str é essencial para manter a integridade de CNPJs e vírgulas decimais
+    """
+    Processa o relatório de Crédito Presumido capturando dinamicamente 
+    qualquer alíquota de recolhimento efetivo e replicando-a.
+    """
     try:
+        # Lendo o arquivo CSV nº 4 com separador ';' e mantendo integridade de strings
         df = pd.read_csv(file_buffer, sep=';', encoding='latin-1', dtype=str, header=None)
     except Exception:
-        # Fallback para arquivos com encoding diferente ou problemas de delimitador
         file_buffer.seek(0)
         df = pd.read_csv(file_buffer, sep=None, engine='python', dtype=str, header=None)
 
     percentual_atual = ""
     linhas_finais = []
 
+    # Regex para encontrar números com vírgula (ex: 1,30 ou 15,25)
+    padrao_aliquota = re.compile(r'(\d+,\d+)')
+
     for index, row in df.iterrows():
-        # Convertendo a linha para lista para manipulação precisa de colunas
         linha = row.tolist()
-        
-        # Transformamos a linha em texto para busca de padrões de bloco
         linha_texto = " ".join([str(x) for x in linha if pd.notna(x)])
 
-        # Lógica de Identificação de Bloco (Replicação de 1.3, 6 e 14)
-        # Captura o percentual e o mantém "vivo" para as linhas seguintes do bloco
-        if "recolhimento efetivo" in linha_texto.lower() or "Percentual" in linha_texto:
-            if "1,30" in linha_texto:
-                percentual_atual = "1,30"
-            elif "6,00" in linha_texto:
-                percentual_atual = "6,00"
-            elif "14,00" in linha_texto:
-                percentual_atual = "14,00"
+        # IDENTIFICAÇÃO DINÂMICA DO BLOCO
+        # Se a linha contiver a palavra-chave, extraímos o número que vier nela
+        if "recolhimento efetivo" in linha_texto.lower() or "Percentual de" in linha_texto:
+            busca = padrao_aliquota.search(linha_texto)
+            if busca:
+                percentual_atual = busca.group(1)
 
-        # --- REGRAS DE COLUNA SOLICITADAS ---
+        # --- REGRAS DE INTEGRIDADE E POSICIONAMENTO ---
         
-        # 1. Garantir que a linha tenha tamanho suficiente para alcançar a Coluna J (índice 9)
+        # Garante que a linha tenha colunas suficientes para os novos dados
         while len(linha) < 12:
             linha.append("")
 
-        # 2. REPLICAÇÃO: Colocando o percentual "abaixo da coluna I" (na Coluna J / índice 9)
-        # Isso evita que o dado fique "lá no final" e mantém o alinhamento com a Base de Cálculo (I)
+        # REPLICAÇÃO NA COLUNA J (Abaixo da coluna I - Base de Cálculo)
+        # O valor capturado dinamicamente preenche o índice 9
         linha[9] = percentual_atual
 
-        # 3. CONCATENAÇÃO: Unindo dados de duas colunas (ex: CFOP + Produto)
-        # Mantemos a lógica da sua aba Python: Coluna 3 (D) + Coluna 4 (E)
-        cfop = str(linha[3]) if pd.notna(linha[3]) else ""
-        produto = str(linha[4]) if pd.notna(linha[4]) else ""
+        # CONCATENAÇÃO NA COLUNA K (CFOP + Produto)
+        # Mantém a regra de unir Coluna D (3) e Coluna E (4)
+        col_d = str(linha[3]) if pd.notna(linha[3]) and str(linha[3]) != "nan" else ""
+        col_e = str(linha[4]) if pd.notna(linha[4]) and str(linha[4]) != "nan" else ""
         
-        if cfop or produto:
-            # Colocamos o concatenado na Coluna K (índice 10) para não sobrescrever o original
-            linha[10] = f"{cfop} - {produto}".strip(" -")
+        if col_d or col_e:
+            # Concatena preservando a clareza para auditoria
+            linha[10] = f"{col_d} - {col_e}".strip(" -")
+        else:
+            linha[10] = ""
 
         linhas_finais.append(linha)
 
-    # Reconstruindo o DataFrame preservando a hierarquia original
+    # Reconstrução do DataFrame sem simplificações
     df_final = pd.DataFrame(linhas_finais)
 
-    # Exportação para Excel via Buffer para o Streamlit
+    # Geração do Excel com ajuste de layout
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-        df_final.to_excel(writer, index=False, header=False)
+        df_final.to_excel(writer, index=False, header=False, sheet_name='Relatorio_Auditado')
         
-        # Ajuste automático de colunas para facilitar a leitura imediata
-        worksheet = writer.sheets['Sheet1']
+        workbook = writer.book
+        worksheet = writer.sheets['Relatorio_Auditado']
+        
+        # Formatação básica para legibilidade
+        format_texto = workbook.add_format({'align': 'left'})
         for i, col in enumerate(df_final.columns):
-            worksheet.set_column(i, i, 15)
+            worksheet.set_column(i, i, 18, format_texto)
 
     return output.getvalue()
 
 # Interface Streamlit
 st.set_page_config(page_title="Auditoria RET - Domínio", layout="wide")
 st.title("Processador de Crédito Presumido (RET)")
-st.markdown("### Lógica de Blocos: 1.3, 6 e 14")
+st.subheader("Extração Dinâmica de Alíquotas e Blocos")
 
-uploaded_file = st.file_uploader("Arraste o arquivo CSV (nº 4) aqui", type=["csv"])
+uploaded_file = st.file_uploader("Envie o CSV (Arquivo nº 4)", type=["csv"])
 
 if uploaded_file is not None:
-    with st.spinner("Processando replicação de blocos e concatenação..."):
+    with st.spinner("Analisando estrutura fiscal e alíquotas..."):
         try:
-            excel_processado = processar_relatorio_dominio_ret(uploaded_file)
+            excel_data = processar_relatorio_dominio_ret(uploaded_file)
             
-            st.success("Processamento concluído com sucesso!")
+            st.success("Processamento concluído! As alíquotas foram identificadas e replicadas na Coluna J.")
             st.download_button(
-                label="📥 Baixar Planilha (Percentuais na Coluna J)",
-                data=excel_processado,
-                file_name="Auditoria_RET_Final.xlsx",
+                label="📥 Baixar Relatório Processado",
+                data=excel_data,
+                file_name="Auditoria_RET_Dinamico.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
             )
         except Exception as e:
-            st.error(f"Erro crítico no processamento: {e}")
+            st.error(f"Erro ao processar o arquivo: {e}")
+
+st.divider()
+st.info("A lógica de concatenação está na Coluna K e a replicação de alíquotas na Coluna J.")
