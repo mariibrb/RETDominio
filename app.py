@@ -4,10 +4,8 @@ import io
 import re
 
 def processar_ret_dominio(file):
-    # Lendo o conteúdo bruto do arquivo para ignorar o bloqueio de "MIME type"
+    # Leitura do arquivo enviado
     bytes_data = file.getvalue()
-    
-    # Tenta decodificar (Dominio costuma usar latin-1 ou utf-8)
     try:
         content = bytes_data.decode('utf-8')
     except:
@@ -18,9 +16,13 @@ def processar_ret_dominio(file):
     current_percent = ""
 
     for line in lines:
-        # Divide por vírgula (padrão do CSV da Domínio)
-        parts = line.split(',')
-        parts = [p.strip() for p in parts]
+        # Tenta identificar o separador (vírgula ou ponto e vírgula)
+        if ';' in line:
+            parts = line.split(';')
+        else:
+            parts = line.split(',')
+            
+        parts = [p.strip().replace('"', '') for p in parts]
         line_str = " ".join(parts)
 
         # 1. Captura o Percentual de Recolhimento
@@ -31,20 +33,20 @@ def processar_ret_dominio(file):
             processed_rows.append(parts)
             continue
 
-        # 2. Identifica Linhas de Itens (Data no formato Excel ex: 46024.0)
+        # 2. Identifica Linhas de Itens (Produtos)
         try:
+            # Verifica se a primeira coluna é uma data ou o código de data do Excel
             val_0 = parts[0].replace('.0', '')
             if val_0.isdigit() and float(val_0) > 40000:
                 doc = parts[1].replace('.0', '')
-                produto = parts[10]
+                produto = parts[10] if len(parts) > 10 else ""
                 
-                # Garante que a linha tenha colunas suficientes (22 colunas)
+                # Garante as 22 colunas do seu modelo
                 while len(parts) < 22: parts.append("")
                 
-                # REGRAS DA MARIANA:
-                # Coluna G (índice 6): ID Único (Documento-Produto)
+                # Coluna G (índice 6): ID Único
                 parts[6] = f"{doc}-{produto}"
-                # Coluna H (índice 7): Percentual replicado
+                # Coluna H (índice 7): Percentual
                 parts[7] = current_percent
                 
                 processed_rows.append(parts)
@@ -52,7 +54,7 @@ def processar_ret_dominio(file):
         except:
             pass
 
-        # 3. Tratamento de Totais
+        # 3. Linhas de Total
         if "Total:" in line_str or "Total saídas:" in line_str:
             while len(parts) < 22: parts.append("")
             parts[5] = "-"
@@ -64,33 +66,35 @@ def processar_ret_dominio(file):
     return pd.DataFrame(processed_rows)
 
 # --- Interface Streamlit ---
-st.set_page_config(page_title="Conversor RET Domínio", layout="wide", page_icon="📊")
+st.set_page_config(page_title="Conversor RET Nascel", layout="wide")
 
-st.title("📊 Conversor RET - Domínio Sistemas")
-st.markdown(f"**Analista:** Mariana | **Nascel Contabilidade**")
+st.title("📊 Conversor RET - Formato Excel (.xlsx)")
+st.markdown("Gera o arquivo com as colunas de ID e Percentual para auditoria fiscal.")
 
-# REMOVIDA A TRAVA DE TIPO (type=['csv']) para aceitar o arquivo do Excel
-uploaded_file = st.file_uploader("Arraste o arquivo extraído da Domínio aqui", type=None)
+uploaded_file = st.file_uploader("Suba o relatório da Domínio", type=None)
 
 if uploaded_file:
-    with st.spinner('Processando regras fiscais...'):
-        try:
-            df_final = processar_ret_dominio(uploaded_file)
-            
-            st.success("✅ Arquivo processado com sucesso!")
-            
-            # Download do CSV
-            csv_ready = df_final.to_csv(index=False, header=False)
-            st.download_button(
-                label="📥 Baixar CSV para Python",
-                data=csv_ready,
-                file_name=f"PYTHON_{uploaded_file.name}.csv",
-                mime="text/csv"
-            )
-            
-            st.divider()
-            st.write("### 🔍 Conferência Visual (IDs e Percentuais)")
-            st.dataframe(df_final.head(50))
-            
-        except Exception as e:
-            st.error(f"Erro ao processar: {e}")
+    try:
+        df_final = processar_ret_dominio(uploaded_file)
+        
+        # Gerando o Excel em memória (Buffer)
+        output = io.BytesIO()
+        with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+            # header=False para manter o layout original do seu sistema
+            df_final.to_excel(writer, index=False, header=False, sheet_name='Aba Python')
+            writer.close()
+        
+        st.success("✅ Excel gerado com sucesso!")
+        
+        st.download_button(
+            label="📥 Baixar Planilha Excel (.xlsx)",
+            data=output.getvalue(),
+            file_name=f"AUDITORIA_{uploaded_file.name.split('.')[0]}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
+        
+        st.write("### Prévia do que foi gerado:")
+        st.dataframe(df_final.head(30))
+        
+    except Exception as e:
+        st.error(f"Erro ao converter: {e}")
