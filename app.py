@@ -1,101 +1,121 @@
 import streamlit as st
 import pandas as pd
-import re
 import io
+import re
 
-def limpar_e_extrair(conteudo_bruto):
-    # 1. Tenta decodificar o "binário" da Domínio de forma ampla
-    # O 'replace' substitui símbolos estranhos por um espaço, limpando o caminho
-    texto = conteudo_bruto.decode('latin-1', errors='replace')
+def robust_read(file):
+    """Tenta ler o arquivo da Domínio de várias formas diferentes."""
+    content = file.getvalue()
     
-    # Remove caracteres nulos e outros ruídos binários comuns no XLS da Domínio
-    texto_limpo = texto.replace('\x00', '').replace('\x01', '')
-    
-    # Divide o texto em blocos baseando-se no que seriam as "células" do sistema
-    # Arquivos da Domínio costumam usar muitos espaços ou caracteres de controle como separadores
-    lines = texto_limpo.split('\r')
-    if len(lines) < 5: lines = texto_limpo.split('\n')
+    # 1. Tenta como Excel antigo (XLS)
+    try:
+        return pd.read_excel(io.BytesIO(content), engine='xlrd', header=None)
+    except: pass
+        
+    # 2. Tenta como Excel moderno (XLSX)
+    try:
+        return pd.read_excel(io.BytesIO(content), engine='openpyxl', header=None)
+    except: pass
 
+    # 3. Tenta como HTML (Muitos XLS da Domínio são na verdade HTML)
+    try:
+        dfs = pd.read_html(io.BytesIO(content))
+        if dfs: return dfs[0]
+    except: pass
+
+    # 4. Tenta como CSV (Auto-detectando o separador , ou ;)
+    for enc in ['utf-8', 'latin-1', 'cp1252']:
+        try:
+            text = content.decode(enc)
+            return pd.read_csv(io.StringIO(text), sep=None, engine='python', header=None)
+        except: continue
+        
+    return None
+
+def transform_data(df):
+    """Aplica as regras da Mariana: ID Único e Percentual."""
+    if df is None: return None
+    
+    # Converte tudo para string para evitar erros de tipagem
+    data = df.astype(str).values.tolist()
     processed_rows = []
-    current_percent = "0.0"
-
-    for line in lines:
-        # 2. Captura o Percentual de Recolhimento
-        if "recolhimento efetivo" in line.lower():
-            percent_match = re.search(r"(\d+[.,]\d+)", line)
-            if percent_match:
-                current_percent = percent_match.group(1).replace(',', '.')
+    current_percent = ""
+    
+    for row in data:
+        # Limpeza básica (remove 'nan' e espaços extras)
+        row = [x.strip() if x != "nan" else "" for x in row]
+        line_str = " ".join(row)
+        
+        # 1. Captura o percentual vigente (Ex: 1.3, 6.0, 14.0)
+        if "Percentual de recolhimento efetivo:" in line_str:
+            match = re.search(r"(\d+[\.,]\d+)", line_str)
+            if match:
+                current_percent = match.group(1).replace(',', '.')
+            processed_rows.append(row)
             continue
-
-        # 3. Identifica Linhas de Dados
-        # Procuramos por: Documento (4-6 dígitos) + Descrição
-        # A regex abaixo foca em capturar números de documentos típicos
-        parts = re.split(r'\s{2,}', line.strip()) # Divide por grandes espaços
-        parts = [p.strip() for p in parts if p.strip()]
-
-        if len(parts) >= 3:
-            # Tenta achar o número do documento (ex: 1177, 1181...)
-            # Geralmente é o primeiro ou segundo número que aparece
-            numeros = [p for p in parts if p.isdigit() and 3 <= len(p) <= 6]
             
-            if numeros:
-                doc = numeros[0]
-                # A descrição do produto costuma ser a parte mais longa da linha
-                descricoes = [p for p in parts if len(p) > 15]
-                produto = descricoes[0] if descricoes else "PRODUTO NÃO IDENTIFICADO"
-
-                # Monta a estrutura da Aba Python (22 colunas)
-                row = [""] * 22
-                row[0] = "DATA" # Placeholder (Data original fica difícil no binário)
-                row[1] = doc
-                row[6] = f"{doc}-{produto}" # ID Único: Documento-Produto
-                row[7] = current_percent
-                row[10] = produto
+        # 2. Processa linhas de dados (Produtos)
+        # Identificamos pelo número de data do Excel (> 40000) na primeira coluna
+        try:
+            val_0 = row[0].replace('.0', '')
+            if val_0.isdigit() and int(val_0) > 40000:
+                doc = row[1].replace('.0', '')
+                produto = row[10]
                 
-                # Captura valores (contém vírgula e números)
-                valores = [p for p in parts if ',' in p and re.search(r'\d', p)]
-                if len(valores) >= 2:
-                    row[14] = valores[0] # Valor Produto
-                    row[15] = valores[1] # Valor Contábil
+                # Garante que a linha tenha colunas suficientes
+                while len(row) < 22: row.append("")
+                
+                # Aplica as suas regras:
+                row[6] = f"{doc}-{produto}" # Coluna G: ID (Doc-Produto)
+                row[7] = current_percent     # Coluna H: Percentual
                 
                 processed_rows.append(row)
-
+                continue
+        except: pass
+            
+        # 3. Trata linhas de Total (coloca o '-' e o percentual)
+        if "Total:" in line_str or "Total saídas:" in line_str:
+            while len(row) < 22: row.append("")
+            row[5] = "-"
+            row[7] = current_percent
+            processed_rows.append(row)
+        else:
+            processed_rows.append(row)
+            
     return pd.DataFrame(processed_rows)
 
-# --- Interface Streamlit ---
-st.set_page_config(page_title="Conversor RET Domínio", layout="wide")
-st.title("📂 Conversor RET - Peneira Fiscal")
-st.markdown("Esta versão ignora os erros de formato e 'peneira' o texto bruto do arquivo.")
+# Interface do App
+st.set_page_config(page_title="Conversor RET Domínio", layout="wide", page_icon="📊")
 
-file = st.file_uploader("Suba o arquivo XLS da Domínio aqui")
+st.title("📊 Conversor Regime Especial (RET) - Domínio Sistemas")
+st.markdown("""
+Suba o arquivo original extraído do sistema. O conversor irá criar as chaves de busca e 
+organizar os percentuais automaticamente para o seu uso em Python.
+""")
 
-if file:
-    try:
-        conteudo = file.read()
+uploaded_file = st.file_uploader("Arraste o arquivo original (XLS ou CSV)", type=None)
+
+if uploaded_file:
+    with st.spinner('Processando arquivo...'):
+        df_raw = robust_read(uploaded_file)
         
-        with st.spinner('Peneirando dados binários...'):
-            df_final = limpar_e_extrair(conteudo)
+        if df_raw is not None:
+            df_final = transform_data(df_raw)
             
-        if not df_final.empty:
-            st.success(f"✅ {len(df_final)} itens encontrados!")
+            st.success("✅ Arquivo processado com sucesso!")
             
-            csv_ready = df_final.to_csv(index=False, header=False)
+            # Preparação para download
+            csv_buffer = io.StringIO()
+            df_final.to_csv(csv_buffer, index=False, header=False)
+            
             st.download_button(
-                label="📥 Baixar CSV Convertido",
-                data=csv_ready,
-                file_name=f"PROCESSADO_{file.name}.csv",
+                label="📥 Baixar Arquivo Convertido (CSV)",
+                data=csv_buffer.getvalue(),
+                file_name=f"convertido_{uploaded_file.name}.csv",
                 mime="text/csv"
             )
             
-            st.write("### 🔍 Prévia do ID e Percentual:")
-            # Mostra as colunas principais para conferência da Mariana
-            st.dataframe(df_final[[1, 6, 7, 10]].rename(columns={1: "Doc", 6: "ID Gerado", 7: "%", 10: "Produto"}))
+            st.write("### 🔍 Prévia dos dados (Visualização)")
+            st.dataframe(df_final.head(50))
         else:
-            st.error("A peneira não encontrou dados. O arquivo pode estar em um formato binário muito fechado.")
-            st.info("Dica: Tente extrair o relatório da Domínio como 'Relatório em Disco' ou 'CSV' se disponível.")
-
-    except Exception as e:
-        st.error(f"Erro: {e}")
-
-st.sidebar.markdown("---")
-st.sidebar.info("Lógica: Busca padrões de números de nota e descrições longas no meio do código binário.")
+            st.error("❌ Não foi possível ler o arquivo. O formato parece ser incompatível.")
