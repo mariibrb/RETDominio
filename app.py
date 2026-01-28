@@ -3,6 +3,14 @@ import pandas as pd
 import io
 import re
 
+# --- CONFIGURAÇÃO E INTERFACE ---
+# page_icon isolado garante que o navegador identifique o favicon corretamente
+st.set_page_config(
+    page_title="Conversor Relatorio", 
+    page_icon="⚙️", 
+    layout="wide"
+)
+
 # --- ESTILO SENTINELA DINÂMICO ---
 def aplicar_estilo_sentinela_zonas():
     st.markdown("""
@@ -64,8 +72,6 @@ def aplicar_estilo_sentinela_zonas():
         </style>
     """, unsafe_allow_html=True)
 
-# --- CONFIGURAÇÃO E INTERFACE ---
-st.set_page_config(page_title="⚙️ Conversor Relatório RET", layout="wide")
 aplicar_estilo_sentinela_zonas()
 
 def processar_relatorio_dominio_ret(file_buffer):
@@ -130,7 +136,6 @@ st.title("CONVERSOR - DEMONSTRATIVO DE CRÉDITO PRESUMIDO")
 upped_file = st.file_uploader("Arraste o CSV aqui para auditar", type=["csv"])
 
 if upped_file is not None:
-    # Usei o botão de processamento para você ter controle de quando iniciar
     if st.button("🚀 INICIAR CONVERSÃO"):
         with st.spinner("Processando..."):
             excel_out = processar_relatorio_dominio_ret(upped_file)
