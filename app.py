@@ -1,86 +1,95 @@
 import streamlit as st
 import pandas as pd
-import io
 import re
+import io
 
-def processar_regras_mariana(df):
+def processar_texto_sujo(conteudo_bruto):
+    # Tenta decodificar o binário para texto ignorando erros de caracteres estranhos
+    try:
+        texto = conteudo_bruto.decode('utf-8', errors='ignore')
+    except:
+        texto = conteudo_bruto.decode('latin-1', errors='ignore')
+
+    # Remove caracteres nulos e lixo eletrônico que causam o erro de BOF
+    texto_limpo = texto.replace('\x00', '').replace('\x01', '').replace('\x02', '')
+    
+    lines = texto_limpo.split('\n')
     processed_rows = []
     current_percent = None
     
-    # Transformamos em lista para percorrer linha a linha com precisão
-    data = df.values.tolist()
-    
-    for row in data:
-        # Limpa e converte cada célula para string
-        parts = [str(item).strip() if pd.notna(item) else "" for item in row]
+    for line in lines:
+        # Divide por vírgula ou tabulação (comum em arquivos de sistema)
+        parts = re.split(r'[,;]|\t', line)
+        parts = [p.strip() for p in parts if p.strip() or p == ""]
+        
+        if len(parts) < 2: continue
+        
         line_full = " ".join(parts)
         
-        # 1. Identifica o Percentual (Ex: 1.3, 6.0, 14.0)
+        # 1. Identifica o Percentual
         if "Percentual de recolhimento efetivo:" in line_full:
-            match = re.search(r"recolhimento efetivo:\s*(\d+\.?\d*)", line_full)
+            match = re.search(r"(\d+\.?\d*)", line_full)
             if match:
                 current_percent = match.group(1)
             processed_rows.append(parts)
             continue
 
-        # 2. Processa linhas de Itens (Onde a data é o número do Excel > 40000)
+        # 2. Processa Itens (Hierarquia Fiscal)
         try:
-            # Remove o '.0' que o Excel coloca em números
-            val_0 = parts[0].split('.')[0]
-            if val_0.isdigit() and int(val_0) > 40000 and len(parts) > 10:
-                doc = parts[1].split('.')[0]
-                prod_desc = parts[10]
+            # Verifica se a primeira coluna tem cara de data ou número de série (46024...)
+            if parts[0] and (len(parts[0]) >= 5) and len(parts) > 10:
+                doc = parts[1]
+                # No arquivo cru, o produto costuma estar na coluna 10
+                prod_desc = parts[10] if len(parts) > 10 else "PRODUTO"
                 
-                # Criando o ID conforme sua aba Python: Documento-Produto (Índice 6)
+                # Garante que a linha tenha espaço para o ID e Percentual
+                while len(parts) < 12: parts.append("")
+                
+                # Criando ID: Doc-Produto (Coluna G/Índice 6)
                 parts[6] = f"{doc}-{prod_desc}"
-                # Inserindo o Percentual na Coluna H (Índice 7)
+                # Inserindo Percentual (Coluna H/Índice 7)
                 parts[7] = current_percent if current_percent else ""
                 
                 processed_rows.append(parts)
                 continue
-        except (ValueError, IndexError):
+        except:
             pass
 
-        # 3. Totais e Cabeçalhos
-        if "Total:" in line_full or "DÉBITOS PELAS SAÍDAS" in line_full:
-            if len(parts) > 7:
-                parts[5] = "-"
-                parts[7] = current_percent if current_percent else ""
-            processed_rows.append(parts)
-        else:
-            processed_rows.append(parts)
+        processed_rows.append(parts)
             
     return pd.DataFrame(processed_rows)
 
 # --- Interface Streamlit ---
 st.set_page_config(page_title="Conversor RET Domínio", layout="wide")
-st.title("📂 Conversor RET - Direto da Domínio (XLS)")
+st.title("📂 Conversor RET - Força Bruta (Lê arquivo cru)")
 
-# Upload sem travas de tipo para evitar o erro "Not Allowed"
-file = st.file_uploader("Suba o arquivo XLS EXATAMENTE como sai do sistema")
+file = st.file_uploader("Suba o arquivo EXATAMENTE como saiu da Domínio")
 
-if file is not None:
+if file:
     try:
-        # O segredo: engine='xlrd' para ler o formato binário que você enviou
-        df_raw = pd.read_excel(file, engine='xlrd', header=None)
+        # Lê os bytes puros do arquivo para não dar erro de formato
+        bytes_data = file.read()
         
-        with st.spinner('Aplicando regras fiscais...'):
-            df_final = processar_regras_mariana(df_raw)
+        with st.spinner('Limpando sujeira do arquivo e aplicando regras...'):
+            df_final = processar_texto_sujo(bytes_data)
         
-        st.success("✅ Arquivo cru lido e processado!")
-        
-        # Download do CSV pronto para o seu Python
-        csv_ready = df_final.to_csv(index=False, header=False)
-        st.download_button(
-            label="📥 Baixar Relatório para Python",
-            data=csv_ready,
-            file_name=f"PYTHON_{file.name.replace('.xls', '.csv')}",
-            mime="text/csv"
-        )
-        
-        st.write("### 🔍 Conferência Visual (Primeiras 30 linhas)")
-        st.dataframe(df_final.head(30))
+        if not df_final.empty:
+            st.success("✅ Arquivo processado!")
+            
+            csv_ready = df_final.to_csv(index=False, header=False)
+            st.download_button(
+                label="📥 Baixar CSV para Python",
+                data=csv_ready,
+                file_name=f"PROCESSADO_{file.name}.csv",
+                mime="text/csv"
+            )
+            
+            st.write("### 🔍 Prévia do que o Python extraiu:")
+            st.dataframe(df_final.head(30))
+        else:
+            st.error("O arquivo subiu, mas não consegui extrair dados. Verifique se ele não está vazio.")
 
     except Exception as e:
-        st.error(f"Erro ao ler o arquivo original: {e}")
-        st.info("Dica: Certifique-se de que o xlrd está no requirements.txt.")
+        st.error(f"Erro ao processar: {e}")
+
+st.sidebar.info("Esta versão lê o código binário do arquivo diretamente, ignorando os bloqueios de formato do Excel.")
