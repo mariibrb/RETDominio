@@ -1,91 +1,101 @@
 import streamlit as st
 import pandas as pd
 import re
+import io
 
-def extrair_texto_binario(bytes_data):
-    # Tenta decodificar ignorando o que não for texto
-    texto = bytes_data.decode('latin-1', errors='ignore')
+def limpar_e_extrair(conteudo_bruto):
+    # 1. Tenta decodificar o "binário" da Domínio de forma ampla
+    # O 'replace' substitui símbolos estranhos por um espaço, limpando o caminho
+    texto = conteudo_bruto.decode('latin-1', errors='replace')
     
-    # O arquivo da Domínio usa caracteres especiais como separadores invisíveis
-    # Vamos limpar os caracteres de controle (0 a 31 da tabela ASCII) exceto quebras de linha
-    texto_limpo = "".join([char if ord(char) > 31 or char in '\n\r\t' else ' ' for char in texto])
+    # Remove caracteres nulos e outros ruídos binários comuns no XLS da Domínio
+    texto_limpo = texto.replace('\x00', '').replace('\x01', '')
     
-    lines = texto_limpo.split('\n')
+    # Divide o texto em blocos baseando-se no que seriam as "células" do sistema
+    # Arquivos da Domínio costumam usar muitos espaços ou caracteres de controle como separadores
+    lines = texto_limpo.split('\r')
+    if len(lines) < 5: lines = texto_limpo.split('\n')
+
     processed_rows = []
-    current_percent = None
-    
-    # Regex para identificar padrões de nota e produto nas linhas "sujas"
-    # Procuramos por algo que pareça Documento (número) e Produto (descrição)
+    current_percent = "0.0"
+
     for line in lines:
-        if not line.strip(): continue
-        
-        # 1. Busca o Percentual na linha
+        # 2. Captura o Percentual de Recolhimento
         if "recolhimento efetivo" in line.lower():
-            match = re.search(r"(\d+[.,]\d+)", line)
-            if match:
-                current_percent = match.group(1).replace(',', '.')
+            percent_match = re.search(r"(\d+[.,]\d+)", line)
+            if percent_match:
+                current_percent = percent_match.group(1).replace(',', '.')
             continue
 
-        # 2. Identifica linhas de itens
-        # Procuramos o padrão: Fonte ATX, Mochila, Chave Boia...
-        produtos_alvo = ["KP-533", "2010000094199", "Kp-cb206", "2010000094206"]
-        
-        encontrou_produto = any(p in line for p in produtos_alvo)
-        
-        if encontrou_produto:
-            # Tenta extrair o número do documento (geralmente 4 dígitos perto do início)
-            doc_match = re.search(r"\b(\d{4})\b", line)
-            doc = doc_match.group(1) if doc_match else "0000"
+        # 3. Identifica Linhas de Dados
+        # Procuramos por: Documento (4-6 dígitos) + Descrição
+        # A regex abaixo foca em capturar números de documentos típicos
+        parts = re.split(r'\s{2,}', line.strip()) # Divide por grandes espaços
+        parts = [p.strip() for p in parts if p.strip()]
+
+        if len(parts) >= 3:
+            # Tenta achar o número do documento (ex: 1177, 1181...)
+            # Geralmente é o primeiro ou segundo número que aparece
+            numeros = [p for p in parts if p.isdigit() and 3 <= len(p) <= 6]
             
-            # Tenta isolar o nome do produto
-            # Pegamos o termo que deu match
-            prod_nome = next((p for p in produtos_alvo if p in line), "PRODUTO")
-            
-            # Aqui simulamos as colunas da sua planilha original
-            # Note que usamos os índices 6 e 7 como você pediu
-            row = [""] * 22
-            row[0] = "DATA" # Placeholder
-            row[1] = doc
-            row[6] = f"{doc}-{prod_nome}" # ID Único
-            row[7] = current_percent if current_percent else ""
-            row[10] = line.strip() # Descrição completa na coluna do produto
-            
-            processed_rows.append(row)
-            
+            if numeros:
+                doc = numeros[0]
+                # A descrição do produto costuma ser a parte mais longa da linha
+                descricoes = [p for p in parts if len(p) > 15]
+                produto = descricoes[0] if descricoes else "PRODUTO NÃO IDENTIFICADO"
+
+                # Monta a estrutura da Aba Python (22 colunas)
+                row = [""] * 22
+                row[0] = "DATA" # Placeholder (Data original fica difícil no binário)
+                row[1] = doc
+                row[6] = f"{doc}-{produto}" # ID Único: Documento-Produto
+                row[7] = current_percent
+                row[10] = produto
+                
+                # Captura valores (contém vírgula e números)
+                valores = [p for p in parts if ',' in p and re.search(r'\d', p)]
+                if len(valores) >= 2:
+                    row[14] = valores[0] # Valor Produto
+                    row[15] = valores[1] # Valor Contábil
+                
+                processed_rows.append(row)
+
     return pd.DataFrame(processed_rows)
 
 # --- Interface Streamlit ---
 st.set_page_config(page_title="Conversor RET Domínio", layout="wide")
-st.title("📂 Conversor RET - Extrator Direto (XLS Cru)")
+st.title("📂 Conversor RET - Peneira Fiscal")
+st.markdown("Esta versão ignora os erros de formato e 'peneira' o texto bruto do arquivo.")
 
-st.warning("⚠️ Esta versão extrai dados do arquivo binário sem precisar abrir o Excel.")
+file = st.file_uploader("Suba o arquivo XLS da Domínio aqui")
 
-uploaded_file = st.file_uploader("Suba o arquivo XLS da Domínio aqui")
-
-if uploaded_file:
+if file:
     try:
-        conteudo = uploaded_file.read()
+        conteudo = file.read()
         
-        with st.spinner('Escaneando binários da Domínio...'):
-            df_final = extrair_texto_binario(conteudo)
+        with st.spinner('Peneirando dados binários...'):
+            df_final = limpar_e_extrair(conteudo)
             
         if not df_final.empty:
-            st.success("✅ Dados extraídos com sucesso!")
+            st.success(f"✅ {len(df_final)} itens encontrados!")
             
             csv_ready = df_final.to_csv(index=False, header=False)
             st.download_button(
-                label="📥 Baixar CSV para Python",
+                label="📥 Baixar CSV Convertido",
                 data=csv_ready,
-                file_name=f"FINAL_{uploaded_file.name}.csv",
+                file_name=f"PROCESSADO_{file.name}.csv",
                 mime="text/csv"
             )
             
-            st.write("### 🔍 O que conseguimos extrair:")
-            st.dataframe(df_final)
+            st.write("### 🔍 Prévia do ID e Percentual:")
+            # Mostra as colunas principais para conferência da Mariana
+            st.dataframe(df_final[[1, 6, 7, 10]].rename(columns={1: "Doc", 6: "ID Gerado", 7: "%", 10: "Produto"}))
         else:
-            st.error("Não encontrei os produtos alvo no arquivo. Verifique se o relatório está correto.")
-            
-    except Exception as e:
-        st.error(f"Erro no processamento: {e}")
+            st.error("A peneira não encontrou dados. O arquivo pode estar em um formato binário muito fechado.")
+            st.info("Dica: Tente extrair o relatório da Domínio como 'Relatório em Disco' ou 'CSV' se disponível.")
 
-st.sidebar.info("Lógica: O código 'pula' a parte binária estragada e lê apenas os textos de produtos e notas.")
+    except Exception as e:
+        st.error(f"Erro: {e}")
+
+st.sidebar.markdown("---")
+st.sidebar.info("Lógica: Busca padrões de números de nota e descrições longas no meio do código binário.")
