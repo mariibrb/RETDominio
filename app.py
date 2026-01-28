@@ -5,11 +5,11 @@ import re
 
 def processar_relatorio_dominio_ret(file_buffer):
     """
-    Localiza o percentual de recolhimento efetivo e o replica nas linhas abaixo
-    exatamente na mesma coluna onde o valor foi encontrado, respeitando o layout.
+    Processa o RET replicando a alíquota na coluna correta e concatenando 
+    os dados no Índice 10 conforme solicitado.
     """
     try:
-        # Lendo o CSV original com separador ';'
+        # Lendo o CSV original com separador ';' e mantendo tipos como string
         df = pd.read_csv(file_buffer, sep=';', encoding='latin-1', dtype=str, header=None)
     except Exception:
         file_buffer.seek(0)
@@ -29,30 +29,35 @@ def processar_relatorio_dominio_ret(file_buffer):
         linha_texto = " ".join([str(x) for x in linha if pd.notna(x)])
 
         # 1. IDENTIFICAÇÃO DINÂMICA DO PERCENTUAL E DA COLUNA
-        # Procuramos a frase gatilho que você mostrou na imagem
         if "Percentual de recolhimento efetivo" in linha_texto:
-            # Vasculhamos a linha para ver em qual coluna o número (ex: 1,30) está
             for i, celula in enumerate(linha):
                 if pd.notna(celula):
                     match = padrao_aliquota.search(str(celula))
                     if match:
                         percentual_atual = match.group(1)
-                        col_index_aliquota = i # Salva que é o índice 8 (Coluna I), por exemplo
+                        col_index_aliquota = i
                         break
 
-        # 2. REPLICAÇÃO NA MESMA COLUNA
-        # Identificamos se é uma linha de dados (Data na Coluna A no formato DD/MM/AAAA)
+        # 2. PROCESSAMENTO DAS LINHAS DE DADOS (Identificadas por data na Coluna A)
         primeira_celula = str(linha[0]).strip()
         if len(primeira_celula) >= 8 and primeira_celula[0:2].isdigit() and "/" in primeira_celula:
+            # A) Replicação do Percentual na Coluna Identificada
             if percentual_atual and col_index_aliquota is not None:
-                # Replicamos o percentual exatamente na mesma coluna identificada
-                # Isso preencherá a coluna abaixo do "1,30" original
                 if len(linha) > col_index_aliquota:
                     linha[col_index_aliquota] = percentual_atual
 
+            # B) CONCATENAÇÃO NO ÍNDICE 10 (Conteúdo do Índice 2 + Índice 11)
+            # Verificamos se os índices existem na linha atual
+            if len(linha) > 11:
+                valor_indice_2 = str(linha[2]) if pd.notna(linha[2]) and str(linha[2]) != "nan" else ""
+                valor_indice_11 = str(linha[11]) if pd.notna(linha[11]) and str(linha[11]) != "nan" else ""
+                
+                # Realiza a concatenação e grava no Índice 10 (Coluna K)
+                linha[10] = f"{valor_indice_2} - {valor_indice_11}".strip(" -")
+
         linhas_finais.append(linha)
 
-    # DataFrame Final mantendo a estrutura original
+    # DataFrame Final mantendo a estrutura original (sem colunas a mais)
     df_final = pd.DataFrame(linhas_finais)
 
     # Exportação para Excel
@@ -69,7 +74,7 @@ def processar_relatorio_dominio_ret(file_buffer):
         if total_cols > 0:
             worksheet.set_column(0, total_cols - 1, 12, format_texto)
         if total_cols > 10:
-            worksheet.set_column(10, 10, 45, format_texto) # Coluna do Produto
+            worksheet.set_column(10, 10, 50, format_texto) # Coluna K (Índice 10) agora mais larga
 
     return output.getvalue()
 
@@ -80,14 +85,14 @@ st.title("Relatório de Crédito Presumido - RET")
 upped_file = st.file_uploader("Arraste o CSV nº 4 aqui", type=["csv"])
 
 if upped_file is not None:
-    with st.spinner("Processando ajuste fino..."):
+    with st.spinner("Realizando concatenação e ajuste fino..."):
         try:
             excel_out = processar_relatorio_dominio_ret(upped_file)
-            st.success("Boooooa! O percentual foi replicado exatamente na coluna correta.")
+            st.success("Perfeito! Índice 10 atualizado com a concatenação solicitada.")
             st.download_button(
-                label="📥 Baixar Excel Corrigido",
+                label="📥 Baixar Excel Finalizado",
                 data=excel_out,
-                file_name="RET_Dominio_Alinhado.xlsx",
+                file_name="RET_Dominio_Final_Concatenado.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
             )
         except Exception as e:
