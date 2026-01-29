@@ -4,7 +4,6 @@ import io
 import re
 
 # --- CONFIGURAÇÃO E INTERFACE ---
-# page_icon isolado garante que o navegador identifique o favicon corretamente
 st.set_page_config(
     page_title="Conversor Relatorio", 
     page_icon="⚙️", 
@@ -68,6 +67,15 @@ def aplicar_estilo_sentinela_zonas():
             font-weight: 800;
             color: #FF69B4 !important;
             text-align: center;
+            margin-bottom: 0px;
+        }
+        
+        .instrucoes-card {
+            background-color: rgba(255, 255, 255, 0.7);
+            border-radius: 15px;
+            padding: 20px;
+            border-left: 5px solid #FF69B4;
+            margin-bottom: 20px;
         }
         </style>
     """, unsafe_allow_html=True)
@@ -114,24 +122,53 @@ def processar_relatorio_dominio_ret(file_buffer):
     df_final = pd.DataFrame(linhas_finais)
     output = io.BytesIO()
     
-    # SALVAMENTO COM AJUSTE DE COLUNAS
     with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
         df_final.to_excel(writer, index=False, header=False, sheet_name='RET_Auditado')
         workbook = writer.book
         worksheet = writer.sheets['RET_Auditado']
         format_texto = workbook.add_format({'align': 'left'})
         
-        # Aplicando as larguras para facilitar sua leitura manual depois
         total_cols = len(df_final.columns)
         if total_cols > 10:
-            worksheet.set_column(6, 6, 35, format_texto)   # Coluna G (Concatenação)
-            worksheet.set_column(8, 8, 12, format_texto)   # Coluna I (Alíquota)
-            worksheet.set_column(10, 10, 45, format_texto) # Coluna K (Produto)
+            worksheet.set_column(6, 6, 35, format_texto)   # Coluna G
+            worksheet.set_column(8, 8, 12, format_texto)   # Coluna I
+            worksheet.set_column(10, 10, 45, format_texto) # Coluna K
             
     return output.getvalue()
 
 # --- ÁREA VISUAL ---
 st.title("CONVERSOR - DEMONSTRATIVO DE CRÉDITO PRESUMIDO")
+
+# --- SEÇÃO DE MANUAL E RESUMO ---
+with st.container():
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.markdown("""
+        <div class="instrucoes-card">
+            <h3>📖 Passo a Passo</h3>
+            <ol>
+                <li><b>Exportação:</b> Gere o relatório de Crédito Presumido no sistema Domínio em formato <b>CSV</b>.</li>
+                <li><b>Upload:</b> Arraste o arquivo CSV para o campo pontilhado abaixo ou clique em "Browse files".</li>
+                <li><b>Processamento:</b> Clique no botão <b>"INICIAR CONVERSÃO"</b>.</li>
+                <li><b>Download:</b> Após a mensagem de sucesso, clique em <b>"BAIXAR EXCEL AJUSTADO"</b> para salvar o arquivo final.</li>
+            </ol>
+        </div>
+        """, unsafe_allow_html=True)
+
+    with col2:
+        st.markdown("""
+        <div class="instrucoes-card">
+            <h3>📊 O que será obtido?</h3>
+            <ul>
+                <li><b>Alíquotas Automatizadas:</b> O sistema identifica o "Percentual de recolhimento efetivo" e preenche automaticamente nas linhas de movimento.</li>
+                <li><b>Concatenação Inteligente:</b> União das colunas de descrição e códigos para melhor visualização.</li>
+                <li><b>Formatação Excel:</b> Arquivo .xlsx pronto para análise, com colunas ajustadas e sem erros de leitura de caracteres (UTF-8/Latin-1).</li>
+            </ul>
+        </div>
+        """, unsafe_allow_html=True)
+
+st.markdown("---")
 
 upped_file = st.file_uploader("Arraste o CSV aqui para auditar", type=["csv"])
 
