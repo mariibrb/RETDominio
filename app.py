@@ -83,7 +83,7 @@ def aplicar_estilo_sentinela_zonas():
 aplicar_estilo_sentinela_zonas()
 
 def processar_relatorio_dominio_ret(file_buffer):
-    # Lendo com skipinitialspace=False para garantir que espaços internos e finais não sejam ignorados
+    # Forçando o pandas a não limpar espaços iniciais ou finais com skipinitialspace=False
     try:
         df = pd.read_csv(file_buffer, sep=';', encoding='latin-1', dtype=str, header=None, skipinitialspace=False)
     except Exception:
@@ -108,18 +108,22 @@ def processar_relatorio_dominio_ret(file_buffer):
                         col_index_aliquota = i 
                         break
 
+        # A verificação da linha continua igual
         primeira_celula = str(linha[0]).strip()
         if len(primeira_celula) >= 8 and primeira_celula[0:2].isdigit() and "/" in primeira_celula:
             if percentual_atual and col_index_aliquota is not None:
                 linha[col_index_aliquota] = percentual_atual
 
-            if len(linha) > 10:
-                # Captura bruta sem NENHUM processamento de string (sem strip, sem replace)
+            # AJUSTE DE CONCATENAÇÃO BRUTA
+            if len(linha) >= 12:
+                # v_b = Nota (Coluna B / Index 1)
+                # v_k = Produto (Coluna K / Index 10)
+                # Usamos o valor direto da célula sem NENHUMA função de string adicional
                 v_b = str(linha[1]) if pd.notna(linha[1]) else ""
                 v_k = str(linha[10]) if pd.notna(linha[10]) else ""
                 
-                # Concatenação literal: Nota + Hífen separador + Produto (com seu espaço e hífen final)
-                linha[6] = f"{v_b}-{v_k}"
+                # Concatenação Literal: Nota + Hífen + Produto (com todos os seus caracteres originais)
+                linha[6] = v_b + "-" + v_k
 
         linhas_finais.append(linha)
 
@@ -132,11 +136,10 @@ def processar_relatorio_dominio_ret(file_buffer):
         worksheet = writer.sheets['RET_Auditado']
         format_texto = workbook.add_format({'align': 'left'})
         
-        total_cols = len(df_final.columns)
-        if total_cols > 10:
-            worksheet.set_column(6, 6, 60, format_texto)   
-            worksheet.set_column(8, 8, 12, format_texto)   
-            worksheet.set_column(10, 10, 60, format_texto) 
+        # Ajuste de largura para garantir que o hífen final apareça no Excel
+        if len(df_final.columns) > 10:
+            worksheet.set_column(6, 6, 80, format_texto)   # Coluna G (Resultado)
+            worksheet.set_column(10, 10, 80, format_texto) # Coluna K (Original)
             
     return output.getvalue()
 
@@ -145,16 +148,15 @@ st.title("CONVERSOR - DEMONSTRATIVO DE CRÉDITO PRESUMIDO")
 
 with st.container():
     col1, col2 = st.columns(2)
-    
     with col1:
         st.markdown("""
         <div class="instrucoes-card">
             <h3>📖 Passo a Passo</h3>
             <ol>
-                <li><b>Exportação:</b> Gere o relatório de Crédito Presumido no sistema Domínio em formato <b>CSV</b>.</li>
-                <li><b>Upload:</b> Arraste o arquivo CSV para o campo pontilhado abaixo ou clique em "Browse files".</li>
-                <li><b>Processamento:</b> Clique no botão <b>"INICIAR CONVERSÃO"</b>.</li>
-                <li><b>Download:</b> Após a mensagem de sucesso, clique em <b>"BAIXAR EXCEL AJUSTADO"</b> para salvar o arquivo final.</li>
+                <li><b>Exportação:</b> Gere o relatório no sistema Domínio em formato <b>CSV</b>.</li>
+                <li><b>Upload:</b> Arraste o arquivo CSV para o campo abaixo.</li>
+                <li><b>Processamento:</b> Clique em <b>"INICIAR CONVERSÃO"</b>.</li>
+                <li><b>Download:</b> Salve o arquivo final clicando em baixar.</li>
             </ol>
         </div>
         """, unsafe_allow_html=True)
@@ -164,9 +166,8 @@ with st.container():
         <div class="instrucoes-card">
             <h3>📊 O que será obtido?</h3>
             <ul>
-                <li><b>Alíquotas Automatizadas:</b> Preenchimento automático baseado no percentual efetivo.</li>
-                <li><b>Concatenação Íntegra:</b> Nota + Produto preservando espaços e hífens originais.</li>
-                <li><b>Formatação Excel:</b> Colunas largas para evitar cortes visuais.</li>
+                <li><b>Alíquotas Automatizadas:</b> Preenchimento do percentual efetivo.</li>
+                <li><b>Concatenação Literal:</b> Nota + Produto mantendo cada espaço e hífen da célula.</li>
             </ul>
         </div>
         """, unsafe_allow_html=True)
@@ -179,7 +180,7 @@ if upped_file is not None:
     if st.button("🚀 INICIAR CONVERSÃO"):
         with st.spinner("Processando..."):
             excel_out = processar_relatorio_dominio_ret(upped_file)
-            st.success("✅ Conversão concluída com sucesso!")
+            st.success("✅ Conversão concluída!")
             st.download_button(
                 label="📥 BAIXAR EXCEL AJUSTADO",
                 data=excel_out,
