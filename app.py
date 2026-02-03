@@ -115,7 +115,9 @@ def processar_relatorio_dominio_ret(file_buffer):
             if len(linha) > 10:
                 v_b = str(linha[1]) if pd.notna(linha[1]) and str(linha[1]) != "nan" else ""
                 v_k = str(linha[10]) if pd.notna(linha[10]) and str(linha[10]) != "nan" else ""
-                linha[6] = f"{v_b}-{v_k}".strip("-")
+                
+                # Ajuste: Apenas concatena Nota + Hífen + Produto integral (sem strip)
+                linha[6] = f"{v_b}-{v_k}"
 
         linhas_finais.append(linha)
 
