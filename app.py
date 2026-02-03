@@ -83,7 +83,7 @@ def aplicar_estilo_sentinela_zonas():
 aplicar_estilo_sentinela_zonas()
 
 def processar_relatorio_dominio_ret(file_buffer):
-    # Leitura literal (quoting=3 ignora aspas, mantendo o texto puro do CSV)
+    # Leitura estilo Excel: Sem ignorar espaços e sem interpretar caracteres de controle (quoting=3)
     try:
         df = pd.read_csv(file_buffer, sep=';', encoding='latin-1', dtype=str, header=None, skipinitialspace=False, quoting=3)
     except Exception:
@@ -108,21 +108,20 @@ def processar_relatorio_dominio_ret(file_buffer):
                         col_index_aliquota = i 
                         break
 
-        # Verificação da linha de movimento
+        # Mantém a lógica fiscal e de auditoria inalterada
         primeira_celula = str(linha[0]).strip()
         if len(primeira_celula) >= 8 and primeira_celula[0:2].isdigit() and "/" in primeira_celula:
             if percentual_atual and col_index_aliquota is not None:
                 linha[col_index_aliquota] = percentual_atual
 
+            # Concatenação literal do conteúdo das células
             if len(linha) > 10:
-                # v_b = Nota (Index 1) | v_k = Produto (Index 10)
-                # Captura direta sem qualquer manipulação de string
+                # Nota Fiscal (v_b) e Produto (v_k) capturados sem NENHUM processamento de string
                 v_b = str(linha[1]) if pd.notna(linha[1]) else ""
                 v_k = str(linha[10]) if pd.notna(linha[10]) else ""
                 
-                # CONCATENAÇÃO LITERAL (Estilo Excel)
-                # O "-" inserido é apenas o separador entre nota e produto.
-                # O hífen que pertence ao produto (v_k) virá grudado nele.
+                # O "-" entre as variáveis é o único caractere adicionado manualmente.
+                # O hífen que pertence ao código do produto em v_k será preservado.
                 linha[6] = v_b + "-" + v_k
 
         linhas_finais.append(linha)
@@ -137,8 +136,8 @@ def processar_relatorio_dominio_ret(file_buffer):
         format_texto = workbook.add_format({'align': 'left'})
         
         if len(df_final.columns) > 10:
-            worksheet.set_column(6, 6, 85, format_texto)   # Coluna G
-            worksheet.set_column(10, 10, 85, format_texto) # Coluna K
+            worksheet.set_column(6, 6, 90, format_texto)   # Coluna G (Resultado final)
+            worksheet.set_column(10, 10, 90, format_texto) # Coluna K (Original do sistema)
             
     return output.getvalue()
 
@@ -165,8 +164,8 @@ with st.container():
         <div class="instrucoes-card">
             <h3>📊 O que será obtido?</h3>
             <ul>
-                <li><b>Alíquotas Automatizadas:</b> Preenchimento do percentual efetivo.</li>
-                <li><b>Concatenação Literal:</b> Nota + Produto (respeita o hífen do código).</li>
+                <li><b>Alíquotas Automatizadas:</b> Preenchimento do percentual de recolhimento efetivo.</li>
+                <li><b>Concatenação Íntegra:</b> Nota + Produto mantendo cada caractere original da célula.</li>
             </ul>
         </div>
         """, unsafe_allow_html=True)
@@ -179,7 +178,7 @@ if upped_file is not None:
     if st.button("🚀 INICIAR CONVERSÃO"):
         with st.spinner("Processando..."):
             excel_out = processar_relatorio_dominio_ret(upped_file)
-            st.success("✅ Conversão concluída!")
+            st.success("✅ Conversão concluída com sucesso!")
             st.download_button(
                 label="📥 BAIXAR EXCEL AJUSTADO",
                 data=excel_out,
