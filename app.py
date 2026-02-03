@@ -83,7 +83,7 @@ def aplicar_estilo_sentinela_zonas():
 aplicar_estilo_sentinela_zonas()
 
 def processar_relatorio_dominio_ret(file_buffer):
-    # skipinitialspace=False e quoting=3 (QUOTE_NONE) para não ignorar absolutamente nada do arquivo original
+    # Leitura literal (quoting=3 ignora aspas, mantendo o texto puro do CSV)
     try:
         df = pd.read_csv(file_buffer, sep=';', encoding='latin-1', dtype=str, header=None, skipinitialspace=False, quoting=3)
     except Exception:
@@ -108,19 +108,21 @@ def processar_relatorio_dominio_ret(file_buffer):
                         col_index_aliquota = i 
                         break
 
+        # Verificação da linha de movimento
         primeira_celula = str(linha[0]).strip()
         if len(primeira_celula) >= 8 and primeira_celula[0:2].isdigit() and "/" in primeira_celula:
             if percentual_atual and col_index_aliquota is not None:
                 linha[col_index_aliquota] = percentual_atual
 
             if len(linha) > 10:
-                # Pega o conteúdo LITERAL de cada célula como string pura
-                # v_b (Nota na Coluna B) e v_k (Produto na Coluna K)
-                v_b = str(linha[1]) if linha[1] is not None else ""
-                v_k = str(linha[10]) if linha[10] is not None else ""
+                # v_b = Nota (Index 1) | v_k = Produto (Index 10)
+                # Captura direta sem qualquer manipulação de string
+                v_b = str(linha[1]) if pd.notna(linha[1]) else ""
+                v_k = str(linha[10]) if pd.notna(linha[10]) else ""
                 
-                # Concatenação idêntica ao Excel: CONCATENAR(B; "-"; K)
-                # Mantém espaços e hífens internos ou finais que já existam em v_k
+                # CONCATENAÇÃO LITERAL (Estilo Excel)
+                # O "-" inserido é apenas o separador entre nota e produto.
+                # O hífen que pertence ao produto (v_k) virá grudado nele.
                 linha[6] = v_b + "-" + v_k
 
         linhas_finais.append(linha)
@@ -134,11 +136,9 @@ def processar_relatorio_dominio_ret(file_buffer):
         worksheet = writer.sheets['RET_Auditado']
         format_texto = workbook.add_format({'align': 'left'})
         
-        total_cols = len(df_final.columns)
-        if total_cols > 10:
-            worksheet.set_column(6, 6, 80, format_texto)   
-            worksheet.set_column(8, 8, 12, format_texto)   
-            worksheet.set_column(10, 10, 80, format_texto) 
+        if len(df_final.columns) > 10:
+            worksheet.set_column(6, 6, 85, format_texto)   # Coluna G
+            worksheet.set_column(10, 10, 85, format_texto) # Coluna K
             
     return output.getvalue()
 
@@ -166,7 +166,7 @@ with st.container():
             <h3>📊 O que será obtido?</h3>
             <ul>
                 <li><b>Alíquotas Automatizadas:</b> Preenchimento do percentual efetivo.</li>
-                <li><b>Concatenação Literal:</b> Nota + "-" + Produto (Lê o conteúdo real da célula).</li>
+                <li><b>Concatenação Literal:</b> Nota + Produto (respeita o hífen do código).</li>
             </ul>
         </div>
         """, unsafe_allow_html=True)
